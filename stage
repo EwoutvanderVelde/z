@@ -24,6 +24,7 @@
 #include "AliAnalysisManager.h"
 #include "AliAnalysisTask.h"
 #include "AliDetectorPID.h"
+#include "AliKFParticle.h"
 #include "AliPID.h"
 #include "AliPIDResponse.h"
 #include "TChain.h"
@@ -33,7 +34,6 @@
 #include "TList.h"
 #include "TLorentzVector.h"
 #include "TMath.h"
-#include "AliKFParticle.h"
 class AliAnalysisTaskMyTask;  // your analysis class
 using namespace std;  // std namespace: so you can do things like 'cout'
 ClassImp(AliAnalysisTaskMyTask)  // classimp: necessary for root
@@ -242,7 +242,7 @@ void AliAnalysisTaskMyTask::UserExec(Option_t*) {
   // get an event (called fAOD) from the input file
   // there's another event format (ESD) which works in a similar wya
   // but is more cpu/memory unfriendly. for now, we'll stick with aod's
-  if (!fAOD)return;  
+  if (!fAOD) return;
   // if the pointer to the event is empty (getting it failed) skip
   // this event
   // example part: i'll show how to loop over the tracks in an event
@@ -251,17 +251,20 @@ void AliAnalysisTaskMyTask::UserExec(Option_t*) {
   auto fourVector = new TLorentzVector(0, 0, 0, 0);
   Int_t electronCounter = 0;
   Int_t positronCounter = 0;
-// see how many tracks there are in the event
-  Int_t iTracks(fAOD->GetNumberOfTracks());  
+  // see how many tracks there are in the event
+  Int_t iTracks(fAOD->GetNumberOfTracks());
   std::vector<AliKFParticle> electrons;
-  electrons.reserve(iTracks/10);
+  electrons.reserve(iTracks / 10);
+  std::vector<Int_t> electron_id;
+  electron_id.reserve(iTracks / 10);
   std::vector<AliKFParticle> positrons;
-  positrons.reserve(iTracks/10);
+  positrons.reserve(iTracks / 10);
+  std::vector<Int_t> positron_id;
+  positron_id.reserve(iTracks / 10);
   for (Int_t i(0); i < iTracks; i++) {  // loop ove rall these tracks
-    AliAODTrack* track = static_cast<AliAODTrack*>(fAOD->GetTrack(i));  
-       
+    AliAODTrack* track = static_cast<AliAODTrack*>(fAOD->GetTrack(i));
     if (!track) continue;
-    if(!track->TestFilterBit(AliAODTrack::kTrkTPCOnly)) continue;
+    if (!track->TestFilterBit(AliAODTrack::kTrkTPCOnly)) continue;
     fHistPt->Fill(track->Pt());
     fHistPz->Fill(track->Pz());
     fHistEta->Fill(track->Eta());
@@ -269,7 +272,8 @@ void AliAnalysisTaskMyTask::UserExec(Option_t*) {
     fHistEnergy->Fill(track->E());
     fHistCharge->Fill(track->Charge());
     fHistPE->Fill(track->P(), track->GetTPCsignal());
-    AliPIDResponse::EDetPidStatus status = fPIDResponse->CheckPIDStatus(AliPIDResponse::kTPC, track);
+    AliPIDResponse::EDetPidStatus status =
+        fPIDResponse->CheckPIDStatus(AliPIDResponse::kTPC, track);
     fHistStatus->Fill(status);
     Double_t nsigmaTPC = -999;
     nsigmaTPC = fPIDResponse->NumberOfSigmasTPC(track, AliPID::kElectron);
@@ -282,84 +286,61 @@ void AliAnalysisTaskMyTask::UserExec(Option_t*) {
       fHistElectronPE->Fill(track->P(), track->GetTPCsignal());
       if (track->Charge() == -1) {
         electronCounter += 1;
-        AliKFParticle electron(*static_cast<AliVTrack *>(track), 11);
+        AliKFParticle electron(*static_cast<AliVTrack*>(track), 11);
         electrons.push_back(electron);
+        electron_id.push_back(track->GetID());
       } else {
         positronCounter += 1;
-        AliKFParticle positron(*static_cast<AliVTrack *>(track), -11);
+        AliKFParticle positron(*static_cast<AliVTrack*>(track), -11);
         positrons.push_back(positron);
+        positron_id.push_back(track->GetID());
       }
     }
-  }  // continue until all the tracks are processed
-  if (electronCounter != 0) {
-    // cout << "Electrons found! Number: " << electronCounter << "\n";
-  }
-  if (positronCounter != 0) {
-    // cout << "Positrons found! Numer: " << positronCounter << "\n";
   }
   // For-loop-ception, let's see if it works or worken't
-  //Reconstruct only gammas
+  // Reconstruct only gammas
   std::vector<AliKFParticle> photons;
-  for (const auto& electron: electrons) {
-      for (const auto& positron: positrons) {
-          AliKFParticle photon(electron, positron);
-          fHistPtPhoton->Fill(photon.GetPt());
-          fHistInvariantMassPhoton->Fill(photon.GetMass());
-      }
+  std::vector<std::array<Int_t, 2>> photon_track_ids;
+  for (int i_electron(0); i_electron < electrons.size(); i_electron++) {
+    for (int i_positron(0); i_positron < positrons.size(); i_positron++) {
+      AliKFParticle photon(electrons[i_electron], positrons[i_positron]);
+      if (photon.GetNDF() < 1) continue;
+      if (photon.GetMass() > 0.7) continue;
+      fHistPtPhoton->Fill(photon.GetPt());
+      fHistInvariantMassPhoton->Fill(photon.GetMass());
+      photons.push_back(photon);
+      const std::array<Int_t, 2> daughters_id = {electron_id[i_electron],
+                                                 positron_id[i_positron]};
+      photon_track_ids.push_back(daughters_id);
+    }
   }
-  
-//   if (electronCounter > 1 and positronCounter > 1) {
-//     // Pick 2 electrons from the list
-//     for (Int_t electronIndex1 = 0; electronIndex1 < electronCounter;
-//          electronIndex1++) {
-//       TLorentzVector* electron1 =
-//           (TLorentzVector*)electronList->At(electronIndex1);
-//       for (Int_t electronIndex2 = 0; electronIndex2 < electronCounter;
-//            electronIndex2++) {
-//         TLorentzVector* electron2 =
-//             (TLorentzVector*)electronList->At(electronIndex2);
-//         if (electron1 == electron2)
-//           continue;  // Don't use the same electron to make the photons
-//         // Pick 2 positrons from the list
-//         for (Int_t positronIndex1 = 0; positronIndex1 < positronCounter;
-//              positronIndex1++) {
-//           TLorentzVector* positron1 =
-//               (TLorentzVector*)positronList->At(positronIndex1);
-//           for (Int_t positronIndex2 = 0; positronIndex2 < positronCounter;
-//                positronIndex2++) {
-//             TLorentzVector* positron2 =
-//                 (TLorentzVector*)positronList->At(positronIndex2);
-//             if (*positron1 == *positron2)
-//               continue;  // Don't use the same positron
-//             TLorentzVector photon1 =
-//                 *electron1 + *positron1;  // Define these for future purposes
-//             TLorentzVector photon2 = *electron2 + *positron2;
-//             fHistPtPhoton->Fill(photon2.Pt());
-//             fHistPtPhoton->Fill(photon1.Pt());
-//             // double_t M = sqrt(photon1.E() * photon2.E() - photon1.Pt() *
-//             // photon2.Pt() * cos( photon1.Eta() - photon2.Eta() ) ) ;
-//             // A selection
-//             if (photon1.M() > 0.7 || photon2.M() > 0.7) continue;
-//             fHistInvariantMassPhoton->Fill(photon1.M());
-//             fHistInvariantMassPhoton->Fill(photon2.M());
-//             TLorentzVector pi0 = photon1 + photon2;
-//             if (pi0.M() > 0.3) continue;
-//             fHistInvariantMass->Fill(pi0.M());
-//             fHistPtPion->Fill(pi0.Pt());
-//             if (pi0.Pt() <= 0.4) {
-//               fHistInvariantMassPi1->Fill(pi0.M());
-//             } else if (pi0.Pt() <= 0.7) {
-//               fHistInvariantMassPi2->Fill(pi0.M());
-//             } else if (pi0.Pt() <= 1) {
-//               fHistInvariantMassPi3->Fill(pi0.M());
-//             } else {
-//               fHistInvariantMassPi4->Fill(pi0.M());
-//             }
-//           }
-//         }
-//       }
-//     }
-//   }
+  // Loop over gammas to reconstruct Pi0;
+  for (int i_photon1(0); i_photon1 < photons.size(); i_photon1++) {
+    const auto& daughters_id_1 = photon_track_ids[i_photon1];
+    const auto& photon1 = photons[i_photon1];
+    for (int i_photon2(i_photon1 + 1); i_photon2 < photons.size();
+         i_photon2++) {
+      const auto& daughters_id_2 = photon_track_ids[i_photon2];
+      const auto& photon2 = photons[i_photon2];
+      // Are the electrons the same?
+      if (daughters_id_1[0] == daughters_id_2[0]) continue;
+      // Are the positrons the same?
+      if (daughters_id_1[1] == daughters_id_2[1]) continue;
+      AliKFParticle pi0(photon1, photon2);
+      if (pi0.GetMass() > 0.3) continue;
+      fHistInvariantMass->Fill(pi0.GetMass());
+      fHistPtPion->Fill(pi0.GetPt());
+      if (pi0.GetPt() <= 0.4) {
+        fHistInvariantMassPi1->Fill(pi0.GetMass());
+      } else if (pi0.GetPt() <= 0.7) {
+        fHistInvariantMassPi2->Fill(pi0.GetMass());
+      } else if (pi0.GetPt() <= 1) {
+        fHistInvariantMassPi3->Fill(pi0.GetMass());
+      } else {
+        fHistInvariantMassPi4->Fill(pi0.GetMass());
+      }
+    }
+  }
   AliAODVertex* primaryVertex = fAOD->GetPrimaryVertex();
   fHistVertex->Fill(primaryVertex->GetX(), primaryVertex->GetY(),
                     primaryVertex->GetZ());
@@ -370,7 +351,6 @@ void AliAnalysisTaskMyTask::UserExec(Option_t*) {
                               // writing it to a file
   PostData(2, fOutputList2);
   PostData(3, fOutputList3);
-  
 }
 //_____________________________________________________________________________
 void AliAnalysisTaskMyTask::Terminate(Option_t*) {
@@ -378,3 +358,5 @@ void AliAnalysisTaskMyTask::Terminate(Option_t*) {
   // called at the END of the analysis (when all events are processed)
 }
 //_____________________________________________________________________________
+Collapse
+
